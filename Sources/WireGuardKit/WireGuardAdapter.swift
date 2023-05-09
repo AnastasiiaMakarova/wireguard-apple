@@ -79,14 +79,14 @@ private enum State {
     }
 }
 
-public class WireGuardAdapter {
+public class WireGuardAdapter: NSObject {
     public typealias LogHandler = (WireGuardLogLevel, String) -> Void
 
-    /// Network routes monitor.
-    private var networkMonitor: NWPathMonitor?
-
     /// Packet tunnel provider.
-    private weak var packetTunnelProvider: NEPacketTunnelProvider?
+    @objc private weak var packetTunnelProvider: NEPacketTunnelProvider?
+
+    /// Used for observing changes in the network path.
+    private var pathUpdateObservation: NSKeyValueObservation!
 
     /// Log handler closure.
     private let logHandler: LogHandler
@@ -183,6 +183,7 @@ public class WireGuardAdapter {
         self.packetTunnelProvider = packetTunnelProvider
         self.logHandler = logHandler
 
+        super.init()
         setupLogHandler()
     }
 
@@ -190,9 +191,6 @@ public class WireGuardAdapter {
         // Force remove logger to make sure that no further calls to the instance of this class
         // can happen after deallocation.
         wgSetLogger(nil, nil)
-
-        // Cancel network monitor
-        networkMonitor?.cancel()
 
         // Shutdown the tunnel
         if case .started(let handle, _) = self.state {
@@ -251,12 +249,16 @@ public class WireGuardAdapter {
             }
 
             self.socketType = socketType
-
-            let networkMonitor = NWPathMonitor()
-            networkMonitor.pathUpdateHandler = { [weak self] path in
-                self?.didReceivePathUpdate(path: path)
+            self.pathUpdateObservation = self.observe(\.packetTunnelProvider?.defaultPath, options: [.old, .new]) { [weak self] _, change in
+                guard let new = change.newValue,
+                      new == nil ||
+                      change.oldValue == nil ||
+                      change.oldValue! == nil ||
+                      !new!.isEqual(to: change.oldValue!!) else {
+                    return
+                }
+                self?.didReceivePathUpdate(path: new)
             }
-            networkMonitor.start(queue: self.workQueue)
 
             do {
                 let settingsGenerator = try self.makeSettingsGenerator(with: tunnelConfiguration)
@@ -269,11 +271,11 @@ public class WireGuardAdapter {
                     try self.startWireGuardBackend(wgConfig: wgConfig),
                     settingsGenerator
                 )
+
                 self.observeStateChanges()
-                self.networkMonitor = networkMonitor
                 completionHandler(nil)
             } catch let error as WireGuardAdapterError {
-                networkMonitor.cancel()
+                self.pathUpdateObservation?.invalidate()
                 completionHandler(error)
             } catch {
                 fatalError()
@@ -297,8 +299,8 @@ public class WireGuardAdapter {
                 return
             }
 
-            self.networkMonitor?.cancel()
-            self.networkMonitor = nil
+            self.pathUpdateObservation?.invalidate()
+            self.pathUpdateObservation = nil
 
             self.state = .stopped
 
@@ -485,14 +487,13 @@ public class WireGuardAdapter {
 
     /// Helper method used by network path monitor.
     /// - Parameter path: new network path
-    private func didReceivePathUpdate(path: Network.NWPath) {
-        self.logHandler(.verbose, "Network change detected with \(path.status) route and interface order \(path.availableInterfaces)")
+    private func didReceivePathUpdate(path: NetworkExtension.NWPath?) {
+        self.logHandler(.verbose, path?.pathUpdateDescription ?? "Network went offline.")
 
         switch self.state {
         case .started(let handle, let settingsGenerator):
-            guard path.status.isSatisfiable else {
-                self.logHandler(.verbose, "Connectivity offline, pausing backend. \(path.unsatisfiedReasonString)")
-
+            guard let path, path.status.isSatisfiable else {
+                self.logHandler(.verbose, "Connectivity offline, pausing backend.")
                 self.state = .temporaryShutdown(handle, settingsGenerator)
                 wgSetNetworkAvailable(handle, 0)
                 return
@@ -511,8 +512,8 @@ public class WireGuardAdapter {
             wgBumpSockets(handle)
 
         case let .temporaryShutdown(handle, settingsGenerator):
-            guard path.status.isSatisfiable else {
-                self.logHandler(.verbose, "Connectivity still offline. \(path.unsatisfiedReasonString)")
+            guard let path, path.status.isSatisfiable else {
+                self.logHandler(.verbose, "Connectivity still offline.")
                 return
             }
 
@@ -538,24 +539,41 @@ public enum WireGuardLogLevel: Int32 {
     case error = 1
 }
 
-private extension Network.NWPath.Status {
-    /// Returns `true` if the path is satisfiable.
-    var isSatisfiable: Bool {
+private extension NetworkExtension.NWPath {
+    var pathUpdateDescription: String {
+        var result = "Network change detected with \(status). isExpensive: \(isExpensive)"
+        if #available(iOS 13, macOS 10.15, *) {
+            result += " isConstrained: \(isConstrained)"
+        }
+        return result
+    }
+}
+
+private extension NetworkExtension.NWPathStatus: CustomStringConvertible {
+    var description: String {
         switch self {
+        case .satisfiable:
+            return "satisfiable"
         case .satisfied:
-            return true
-        case .unsatisfied, .requiresConnection:
-            return false
+            return "satisfied"
+        case .unsatisfied:
+            return "unsatisfied"
         @unknown default:
-            return true
+            return "unknown (\(rawValue))"
         }
     }
 }
 
-private extension Network.NWPath {
-    var unsatisfiedReasonString: String {
-        guard #available(iOS 14.2, macOS 11.0, *) else { return "" }
-
-        return "(\(unsatisfiedReason))"
+private extension NetworkExtension.NWPathStatus {
+    /// Returns `true` if the path is potentially satisfiable.
+    var isSatisfiable: Bool {
+        switch self {
+        case .satisfiable, .satisfied:
+            return true
+        case .unsatisfied:
+            return false
+        @unknown default:
+            return true
+        }
     }
 }
