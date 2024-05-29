@@ -549,8 +549,8 @@ private extension NetworkExtension.NWPath {
     }
 }
 
-private extension NetworkExtension.NWPathStatus: CustomStringConvertible {
-    var description: String {
+extension NetworkExtension.NWPathStatus: CustomStringConvertible {
+    public var description: String {
         switch self {
         case .satisfiable:
             return "satisfiable"
@@ -558,6 +558,8 @@ private extension NetworkExtension.NWPathStatus: CustomStringConvertible {
             return "satisfied"
         case .unsatisfied:
             return "unsatisfied"
+        case .invalid:
+            return "invalid"
         @unknown default:
             return "unknown (\(rawValue))"
         }
@@ -570,7 +572,7 @@ private extension NetworkExtension.NWPathStatus {
         switch self {
         case .satisfiable, .satisfied:
             return true
-        case .unsatisfied:
+        case .unsatisfied, .invalid:
             return false
         @unknown default:
             return true
