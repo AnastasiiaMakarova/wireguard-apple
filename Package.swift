@@ -35,7 +35,12 @@ let package = Package(
                 "Makefile"
             ],
             publicHeadersPath: ".",
-            linkerSettings: [.linkedLibrary("wg-go")]
+            swiftSettings: [
+                .unsafeFlags(["-Wno-incomplete-umbrella"])
+            ],
+            linkerSettings: [
+                .linkedLibrary("wg-go")
+            ]
         )
     ]
 )

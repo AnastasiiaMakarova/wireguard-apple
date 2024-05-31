@@ -224,7 +224,6 @@ public class WireGuardAdapter: NSObject {
 
             var previousState: WireGuardGoState? = nil
             while let handle = self.state.handle,
-                  let settingsGenerator = self.state.settingsGenerator,
                   // `wgGetState(_:)` is a blocking call, and will only unblock when the state changes.
                   let goState = WireGuardGoState(rawValue: wgGetState(handle)) {
 
