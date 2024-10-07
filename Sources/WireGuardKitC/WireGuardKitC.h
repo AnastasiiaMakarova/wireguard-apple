@@ -4,6 +4,8 @@
 #include "key.h"
 #include "x25519.h"
 
+#include <sys/types.h>
+
 /* From <sys/kern_control.h> */
 #define CTLIOCGINFO 0xc0644e03UL
 struct ctl_info {
